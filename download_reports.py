@@ -1,15 +1,13 @@
-from playwright.sync_api import sync_playwright
+﻿from playwright.sync_api import sync_playwright
 import os
 import json
 
-# === CONFIG ===
-LOGIN = "rmsunelia"
-PASSWORD = "Sun1755!.."
+LOGIN = os.environ["CRM_LOGIN"]
+PASSWORD = os.environ["CRM_PASSWORD"]
 DOWNLOAD_DIR = os.path.abspath("./downloads")
 HISTORY_FILE = os.path.join(DOWNLOAD_DIR, "downloaded_files.json")
 CRM_URL = "https://crm.secureholiday.net/crm/"
 REPORTS_URL = "https://crm.secureholiday.net/crm/Dashboards/BiReportExtract/Index/FR"
-
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -17,11 +15,9 @@ def load_history():
             return set(json.load(f))
     return set()
 
-
 def save_history(history):
     with open(HISTORY_FILE, "w") as f:
         json.dump(list(history), f)
-
 
 def main():
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -33,7 +29,6 @@ def main():
         context = browser.new_context(accept_downloads=True)
         page = context.new_page()
 
-        # Login
         page.goto(CRM_URL, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3000)
         page.fill('input[placeholder="Entrez votre login"]', LOGIN)
@@ -42,11 +37,9 @@ def main():
         page.wait_for_load_state("networkidle", timeout=30000)
         print(f"Connecte : {page.url}")
 
-        # Page rapports
         page.goto(REPORTS_URL, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(5000)
 
-        # Boutons de telechargement
         download_buttons = page.query_selector_all(
             "a[href*='Download'], a[href*='download'], button.download, "
             ".fa-download, a.btn-download, td a[title], a.glyphicon"
@@ -80,7 +73,6 @@ def main():
 
     save_history(history)
     print(f"\nTermine : {len(new_files)} nouveau(x) fichier(s)")
-
 
 if __name__ == "__main__":
     main()
