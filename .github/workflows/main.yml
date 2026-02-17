@@ -1,0 +1,35 @@
+﻿name: CRM Auto Reports
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  download-and-send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install playwright
+          playwright install chromium
+          playwright install-deps
+
+      - name: Download reports
+        env:
+          CRM_LOGIN: ${{ secrets.CRM_LOGIN }}
+          CRM_PASSWORD: ${{ secrets.CRM_PASSWORD }}
+        run: python download_reports.py
+
+      - name: Send reports
+        env:
+          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python send_reports.py
