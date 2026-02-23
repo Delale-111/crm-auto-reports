@@ -5,7 +5,6 @@ import os
 import time
 import re
 import io
-import base64
 from email.message import EmailMessage
 
 # --- Optional deps (fallback si pas installées) ---
@@ -58,9 +57,10 @@ def _strip_code_fences(text: str) -> str:
     return (text or "").replace("```html", "").replace("```", "").strip()
 
 
-def generer_sparkline_base64(df):
+def generer_sparkline_cid(df, cid_prefix="spark"):
     """
-    Mini-graphique sur les 15 dernières valeurs de la dernière colonne numérique.
+    Génère une mini-courbe PNG et retourne (cid, png_bytes).
+    IMPORTANT: on utilise CID (<img src="cid:...">) car Outlook bloque souvent data:image;base64.
     """
     if plt is None or df is None:
         return None
@@ -83,8 +83,10 @@ def generer_sparkline_base64(df):
         plt.close()
         buf.seek(0)
 
-        image_base64 = base64.b64encode(buf.read()).decode("utf-8")
-        return f'<img src="data:image/png;base64,{image_base64}" alt="Sparkline" />'
+        png_bytes = buf.read()
+        # CID unique (stable pour un contenu donné)
+        cid = f"{cid_prefix}_{abs(hash(png_bytes))}"
+        return cid, png_bytes
     except Exception:
         return None
 
@@ -159,7 +161,8 @@ Ton : professionnel, direct, positif. Commence par "Bonjour,".
 
 def build_ai_dashboard_html(excel_path: str, camping_name: str):
     """
-    Retourne (plain_text, html).
+    Retourne (plain_text, html, related_images)
+    related_images = list of tuples: (cid, bytes, maintype, subtype)
     """
     if pd is None:
         plain = (
@@ -174,17 +177,17 @@ def build_ai_dashboard_html(excel_path: str, camping_name: str):
         Cordialement,<br>Sunelia</p>
         </body></html>
         """
-        return plain, html
+        return plain, html, []
 
     all_sheets = pd.read_excel(excel_path, sheet_name=None)
     noms = list(all_sheets.keys())
 
-    # Comme avant: on ignore potentiellement 1ère et dernière feuille si plusieurs
     feuilles = noms[1:-1] if len(noms) >= 3 else noms
     feuilles = feuilles[:MAX_SHEETS_ANALYZED]
 
     rows_html = ""
     raw_text_for_summary = ""
+    related_images = []
 
     for nom in feuilles:
         df = all_sheets.get(nom)
@@ -192,12 +195,14 @@ def build_ai_dashboard_html(excel_path: str, camping_name: str):
             continue
 
         td_ia = analyser_feuille_kpi(nom, df)
-        spark = generer_sparkline_base64(df)
-        td_graph = (
-            f'<td style="text-align:center;">{spark}</td>'
-            if spark
-            else '<td style="color:#ccc; font-size:10px;">Pas de graph</td>'
-        )
+
+        spark = generer_sparkline_cid(df)
+        if spark:
+            cid, png_bytes = spark
+            related_images.append((cid, png_bytes, "image", "png"))
+            td_graph = f'<td style="text-align:center;"><img src="cid:{cid}" alt="Sparkline" /></td>'
+        else:
+            td_graph = '<td style="color:#ccc; font-size:10px;">Pas de graph</td>'
 
         rows_html += f"""
         <tr style="border-bottom: 1px solid #eee;">
@@ -251,7 +256,7 @@ def build_ai_dashboard_html(excel_path: str, camping_name: str):
         "Une synthèse IA est disponible en version HTML.\n\n"
         "Cordialement,\nSunelia"
     )
-    return plain, html
+    return plain, html, related_images
 
 
 def send_one_email(smtp, email_to: str, subject: str, excel_path: str):
@@ -262,7 +267,7 @@ def send_one_email(smtp, email_to: str, subject: str, excel_path: str):
         .replace("_", " ")
     )
 
-    plain_body, html_body = build_ai_dashboard_html(excel_path, camping)
+    plain_body, html_body, related_images = build_ai_dashboard_html(excel_path, camping)
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -270,7 +275,11 @@ def send_one_email(smtp, email_to: str, subject: str, excel_path: str):
     msg["To"] = email_to
 
     msg.set_content(plain_body)
-    msg.add_alternative(html_body, subtype="html")
+    html_part = msg.add_alternative(html_body, subtype="html")
+
+    # Ajout des images inline via CID (meilleure compatibilité Outlook)
+    for cid, data, maintype, subtype in (related_images or []):
+        html_part.add_related(data, maintype=maintype, subtype=subtype, cid=cid)
 
     with open(excel_path, "rb") as f:
         msg.add_attachment(
