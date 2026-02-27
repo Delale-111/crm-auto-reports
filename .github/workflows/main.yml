@@ -1,8 +1,6 @@
 ﻿name: CRM Auto Reports
 
 on:
-# schedule:
-# - cron: '*/10 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -32,5 +30,4 @@ jobs:
           SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-run: python send_reports.py
-
+        run: python send_reports.py
