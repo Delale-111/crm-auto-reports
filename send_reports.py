@@ -275,11 +275,20 @@ def send_one_email(smtp, email_to: str, subject: str, excel_path: str):
     msg["To"] = email_to
 
     msg.set_content(plain_body)
-    html_part = msg.add_alternative(html_body, subtype="html")
+msg.add_alternative(html_body, subtype="html")
 
-    # Ajout des images inline via CID (meilleure compatibilité Outlook)
-    for cid, data, maintype, subtype in (related_images or []):
-        html_part.add_related(data, maintype=maintype, subtype=subtype, cid=cid)
+# Récupère la partie HTML ajoutée (add_alternative ne retourne rien)
+html_part = msg.get_payload()[-1]
+
+# Forcer multipart/related sur la partie HTML (sinon add_related peut échouer)
+try:
+    html_part.make_related()
+except Exception:
+    pass
+
+# Ajout des images inline via CID (meilleure compatibilité Outlook)
+for cid, data, maintype, subtype in (related_images or []):
+    html_part.add_related(data, maintype=maintype, subtype=subtype, cid=f"<{cid}>")
 
     with open(excel_path, "rb") as f:
         msg.add_attachment(
@@ -342,7 +351,10 @@ def main():
             time.sleep(DELAY_SECONDS)
 
     print(f"Termine ! {total_sent} mails envoyes")
+if total_sent == 0:
+    raise SystemExit("0 mails envoyes (voir erreurs ci-dessus)")
 
 
 if __name__ == "__main__":
     main()
+
