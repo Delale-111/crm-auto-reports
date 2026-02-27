@@ -7,43 +7,36 @@ import re
 import io
 from email.message import EmailMessage
 
-# --- Optional deps (fallback si pas installées) ---
+# Optional deps
 try:
     import pandas as pd
 except Exception:
     pd = None
 
 try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None
-
-try:
+    import matplotlib
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 except Exception:
     plt = None
 
+try:
+    from PIL import Image
+except Exception:
+    Image = None
 
-# --- CONFIG ---
+
 DOWNLOAD_DIR = os.path.abspath("./downloads")
 EMAIL_FROM = os.environ["SMTP_EMAIL"]
 EMAIL_PASSWORD = os.environ["SMTP_PASSWORD"]
-EMAIL_TO_TEST = os.environ["EMAIL_TO"]
-
-# Secret GitHub: OPENAI_API_KEY
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-
-# Limites (coût / temps)
-TAIL_ROWS_PER_SHEET = int(os.environ.get("AI_TAIL_ROWS", "30"))
-MAX_SHEETS_ANALYZED = int(os.environ.get("AI_MAX_SHEETS", "12"))
+EMAIL_TO = os.environ["EMAIL_TO"]
 
 BATCH_SIZE = 3
 DELAY_SECONDS = 10
 
-client = None
-if OPENAI_API_KEY and OpenAI is not None:
-    client = OpenAI(api_key=OPENAI_API_KEY)
+# Animation settings
+MAX_POINTS = int(os.environ.get("SPARK_POINTS", "15"))
+FRAME_MS = int(os.environ.get("SPARK_FRAME_MS", "140"))  # vitesse animation
 
 
 def smtp_connect():
@@ -53,209 +46,106 @@ def smtp_connect():
     return s
 
 
-def _strip_code_fences(text: str) -> str:
-    return (text or "").replace("```html", "").replace("```", "").strip()
-
-
-def generer_sparkline_cid(df, cid_prefix="spark"):
-    """
-    Génère une mini-courbe PNG et retourne (cid, png_bytes).
-    IMPORTANT: CID (<img src="cid:...">) pour compatibilité Outlook (data: base64 souvent bloqué).
-    """
-    if plt is None or df is None:
-        return None
-    try:
-        df_num = df.select_dtypes(include=["number"])
-        if df_num.empty or len(df_num) < 2:
-            return None
-
-        data = df_num.iloc[-15:, -1].dropna()
-        if data.empty:
-            return None
-
-        plt.figure(figsize=(2, 0.5))
-        plt.plot(data.values, linewidth=2)
-        plt.axis("off")
-        plt.tight_layout(pad=0)
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png", transparent=True)
-        plt.close()
-        buf.seek(0)
-
-        png_bytes = buf.read()
-        cid = f"{cid_prefix}_{abs(hash(png_bytes))}"
-        return cid, png_bytes
-    except Exception:
+def find_latest_zip():
+    zips = glob.glob(os.path.join(DOWNLOAD_DIR, "Sunelia_Rapports_indiv_pour_groupe_*.zip"))
+    if not zips:
         return None
 
+    def date_key(path):
+        m = re.findall(r"\d{4}_\d{2}_\d{2}", os.path.basename(path))
+        return m[-1] if m else ""
 
-def analyser_feuille_kpi(nom_feuille: str, df) -> str:
+    return max(zips, key=date_key)
+
+
+def extract_zip(latest_zip: str) -> str:
+    extract_dir = latest_zip.replace(".zip", "")
+    if not os.path.exists(extract_dir):
+        with zipfile.ZipFile(latest_zip, "r") as z:
+            z.extractall(extract_dir)
+        print(f"Dezippe dans : {extract_dir}")
+    else:
+        print(f"Deja dezippe : {extract_dir}")
+    return extract_dir
+
+
+def pick_timeseries_from_excel(excel_path: str):
     """
-    Retourne 2 <td> : KPI + analyse courte.
-    """
-    if client is None or pd is None or df is None or df.empty:
-        return (
-            '<td><div style="font-size:18px; font-weight:bold;">N/A</div>'
-            '<div style="font-size:10px; color:gray;">Données</div></td>'
-            "<td>Pas de données ou IA indisponible.</td>"
-        )
-
-    data_str = df.tail(TAIL_ROWS_PER_SHEET).to_csv(index=False)
-
-    prompt = f"""
-Tu es un analyste. Voici les données de la feuille '{nom_feuille}'.
-
-Mission : Extraire UN KPI clé et UNE phrase d'analyse pour un email.
-
-Données (CSV) :
-{data_str}
-
-Règles strictes :
-1) Réponds UNIQUEMENT avec du HTML correspondant à 2 cellules (<td>).
-2) Format attendu :
-   <td><div style="font-size:18px; font-weight:bold; color:#2c3e50;">[VALEUR KPI]</div>
-       <div style="font-size:10px; color:gray;">[Nom KPI]</div></td>
-   <td>[Analyse ultra-courte, max 20 mots. Mentionne tendance si possible].</td>
-3) Si données vides/illisibles : KPI="N/A" et texte="Pas de données".
-4) Ne mets PAS de <tr>.
-""".strip()
-
-    try:
-        resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-        )
-        return _strip_code_fences(resp.choices[0].message.content)
-    except Exception as e:
-        return f"<td>Erreur IA</td><td>{str(e)}</td>"
-
-
-def generer_intro_globale(raw_kpi_text: str) -> str:
-    if client is None:
-        return "Bonjour,<br>Veuillez trouver ci-dessous la synthèse IA du rapport en pièce jointe."
-
-    prompt = f"""
-Voici des extraits (KPI + analyses) :
-{raw_kpi_text}
-
-Rédige une introduction email (3 lignes max).
-Ton : professionnel, direct, positif. Commence par "Bonjour,".
-""".strip()
-
-    try:
-        resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.5,
-        )
-        return (resp.choices[0].message.content or "").strip().replace("\n", "<br>")
-    except Exception:
-        return "Bonjour,<br>Veuillez trouver ci-dessous la synthèse IA du rapport en pièce jointe."
-
-
-def build_ai_dashboard_html(excel_path: str, camping_name: str):
-    """
-    Retourne (plain_text, html, related_images)
-    related_images = list[(cid, bytes, maintype, subtype)]
+    Trouve une série numérique simple dans le classeur :
+    - parcourt les feuilles
+    - prend la dernière colonne numérique trouvée
+    - retourne les N derniers points
     """
     if pd is None:
-        plain = (
-            "Bonjour,\n\nVeuillez trouver ci-joint le rapport.\n"
-            "Analyse IA indisponible (pandas non installé).\n\nCordialement,\nSunelia"
-        )
-        html = f"""
-        <html><body style="font-family:Arial,sans-serif">
-        <p>Bonjour,<br><br>
-        Veuillez trouver ci-joint le rapport pour : <b>{camping_name}</b>.<br>
-        <span style="color:#888">Analyse IA indisponible (pandas non installé).</span><br><br>
-        Cordialement,<br>Sunelia</p>
-        </body></html>
-        """
-        return plain, html, []
+        return None
 
-    all_sheets = pd.read_excel(excel_path, sheet_name=None)
-    noms = list(all_sheets.keys())
+    try:
+        xls = pd.ExcelFile(excel_path)
+        for sheet in xls.sheet_names:
+            df = pd.read_excel(xls, sheet_name=sheet)
+            if df is None or df.empty:
+                continue
+            num = df.select_dtypes(include=["number"])
+            if num is None or num.empty:
+                continue
+            s = num.iloc[:, -1].dropna()
+            if s.empty:
+                continue
+            values = s.tail(MAX_POINTS).tolist()
+            if len(values) >= 3:
+                return values
+        return None
+    except Exception:
+        return None
 
-    feuilles = noms[1:-1] if len(noms) >= 3 else noms
-    feuilles = feuilles[:MAX_SHEETS_ANALYZED]
 
-    rows_html = ""
-    raw_text_for_summary = ""
-    related_images = []
+def make_animated_gif(values):
+    """
+    Génère un GIF animé (courbe qui se trace progressivement).
+    Retourne bytes du GIF.
+    """
+    if plt is None or Image is None or not values or len(values) < 3:
+        return None
 
-    for nom in feuilles:
-        df = all_sheets.get(nom)
-        if df is None or df.empty:
-            continue
+    frames = []
+    n = len(values)
 
-        td_ia = analyser_feuille_kpi(nom, df)
+    # normalisation simple (évite un axe complètement plat)
+    vmin = min(values)
+    vmax = max(values)
+    if vmax == vmin:
+        vmax = vmin + 1.0
 
-        spark = generer_sparkline_cid(df)
-        if spark:
-            cid, png_bytes = spark
-            related_images.append((cid, png_bytes, "image", "png"))
-            td_graph = f'<td style="text-align:center;"><img src="cid:{cid}" alt="Sparkline" /></td>'
-        else:
-            td_graph = '<td style="color:#ccc; font-size:10px;">Pas de graph</td>'
+    for k in range(2, n + 1):
+        fig = plt.figure(figsize=(2.2, 0.7))
+        ax = fig.add_subplot(111)
+        ax.plot(values[:k], linewidth=2)
+        ax.set_xlim(0, n - 1)
+        ax.set_ylim(vmin, vmax)
+        ax.axis("off")
+        fig.tight_layout(pad=0)
 
-        rows_html += f"""
-        <tr style="border-bottom: 1px solid #eee;">
-            <td style="padding: 10px; font-weight:bold; color:#d35400;">{nom}</td>
-            {td_ia}
-            {td_graph}
-        </tr>
-        """.strip()
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", transparent=True, dpi=110)
+        plt.close(fig)
+        buf.seek(0)
+        frames.append(Image.open(buf).convert("RGBA"))
 
-        raw_text_for_summary += f"Feuille {nom}: {td_ia}\n"
-
-    intro_html = generer_intro_globale(raw_text_for_summary)
-
-    html = f"""
-    <html>
-    <body style="font-family: Arial, sans-serif; color: #333; background-color: #f9f9f9; padding: 20px;">
-        <div style="max-width: 860px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.08);">
-            <h2 style="color: #2c3e50; border-bottom: 2px solid #e67e22; padding-bottom: 10px;">
-                📊 Synthèse IA — {camping_name}
-            </h2>
-
-            <p style="font-size: 14px; line-height: 1.5; color: #555;">
-                {intro_html}
-            </p>
-
-            <table style="width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 13px;">
-                <thead>
-                    <tr style="background-color: #f2f2f2; text-align: left;">
-                        <th style="padding: 10px; width: 18%;">Sujet</th>
-                        <th style="padding: 10px; width: 22%;">KPI Clé</th>
-                        <th style="padding: 10px;">Analyse</th>
-                        <th style="padding: 10px; width: 18%;">Courbe (15 pts)</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows_html or '<tr><td colspan="4" style="padding:10px;color:#999;">Aucune donnée exploitable.</td></tr>'}
-                </tbody>
-            </table>
-
-            <p style="margin-top: 26px; font-size: 11px; color: #999; text-align: center;">
-                Rapport généré par IA — détail complet dans le fichier Excel joint.<br>
-                Source : {os.path.basename(excel_path)}
-            </p>
-        </div>
-    </body>
-    </html>
-    """.strip()
-
-    plain = (
-        f"Bonjour,\n\nVeuillez trouver ci-joint le rapport pour : {camping_name}\n"
-        "Une synthèse IA est disponible en version HTML.\n\n"
-        "Cordialement,\nSunelia"
+    out = io.BytesIO()
+    frames[0].save(
+        out,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=FRAME_MS,
+        loop=0,
+        disposal=2,
+        optimize=True,
     )
-    return plain, html, related_images
+    return out.getvalue()
 
 
-def send_one_email(smtp, email_to: str, subject: str, excel_path: str):
+def build_email(excel_path: str):
     filename = os.path.basename(excel_path)
     camping = (
         filename.replace("Sunelia_Rapports_indiv_pour_groupe_", "")
@@ -263,30 +153,67 @@ def send_one_email(smtp, email_to: str, subject: str, excel_path: str):
         .replace("_", " ")
     )
 
-    plain_body, html_body, related_images = build_ai_dashboard_html(excel_path, camping)
+    values = pick_timeseries_from_excel(excel_path)
+    gif_bytes = make_animated_gif(values) if values else None
+
+    plain = (
+        f"Bonjour,\n\nVeuillez trouver ci-joint le rapport pour : {camping}.\n"
+        "Une courbe (GIF) est incluse si votre client mail l'anime.\n\n"
+        "Cordialement,\nSunelia"
+    )
+
+    # NOTE: certains clients (Outlook desktop) n'animent pas les GIF -> 1ère frame
+    if gif_bytes:
+        cid = f"trend_{abs(hash(gif_bytes))}"
+        html = f"""
+        <html><body style="font-family:Arial,sans-serif">
+          <h2 style="margin:0 0 10px 0;">📈 Synthèse — {camping}</h2>
+          <p>Bonjour,<br>Veuillez trouver ci-dessous la courbe (GIF) et le fichier Excel en pièce jointe.</p>
+          <div style="margin:10px 0;">
+            <img src="cid:{cid}" alt="Courbe animée" />
+          </div>
+          <p style="font-size:11px;color:#777;">
+            Si la courbe semble figée, votre client mail ne supporte pas l'animation GIF.
+          </p>
+        </body></html>
+        """.strip()
+        related = [(cid, gif_bytes, "image", "gif")]
+    else:
+        html = f"""
+        <html><body style="font-family:Arial,sans-serif">
+          <h2 style="margin:0 0 10px 0;">📈 Synthèse — {camping}</h2>
+          <p>Bonjour,<br>Veuillez trouver le fichier Excel en pièce jointe.</p>
+          <p style="font-size:11px;color:#777;">Courbe non disponible (pas de données numériques exploitables).</p>
+        </body></html>
+        """.strip()
+        related = []
+
+    subject = f"Rapport Sunelia - {camping}"
+    return subject, camping, plain, html, related
+
+
+def send_one_email(smtp, excel_path: str):
+    subject, camping, plain_body, html_body, related_images = build_email(excel_path)
 
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = EMAIL_FROM
-    msg["To"] = email_to
+    msg["To"] = EMAIL_TO
 
     msg.set_content(plain_body)
     msg.add_alternative(html_body, subtype="html")
 
-    # add_alternative ne retourne pas la partie ajoutée -> on la récupère
+    # récupérer la partie HTML et la passer en multipart/related
     html_part = msg.get_payload()[-1]
-
-    # Forcer multipart/related sur la partie HTML
     try:
         html_part.make_related()
     except Exception:
         pass
 
-    # Ajout des images inline via CID (Outlook)
     for cid, data, maintype, subtype in (related_images or []):
         html_part.add_related(data, maintype=maintype, subtype=subtype, cid=f"<{cid}>")
 
-    # Pièce jointe Excel
+    # attache Excel
     with open(excel_path, "rb") as f:
         msg.add_attachment(
             f.read(),
@@ -300,28 +227,19 @@ def send_one_email(smtp, email_to: str, subject: str, excel_path: str):
 
 
 def main():
-    zips = glob.glob(os.path.join(DOWNLOAD_DIR, "Sunelia_Rapports_indiv_pour_groupe_*.zip"))
-    if not zips:
+    latest_zip = find_latest_zip()
+    if not latest_zip:
         print("Aucun zip trouve")
         raise SystemExit("Aucun zip trouve")
 
-    def date_key(path):
-        m = re.findall(r"\d{4}_\d{2}_\d{2}", os.path.basename(path))
-        return m[-1] if m else ""
-
-    latest_zip = max(zips, key=date_key)
     print(f"Zip le plus recent : {os.path.basename(latest_zip)}")
-
-    extract_dir = latest_zip.replace(".zip", "")
-    if not os.path.exists(extract_dir):
-        with zipfile.ZipFile(latest_zip, "r") as z:
-            z.extractall(extract_dir)
-        print(f"Dezippe dans : {extract_dir}")
-    else:
-        print(f"Deja dezippe : {extract_dir}")
+    extract_dir = extract_zip(latest_zip)
 
     excels = sorted(glob.glob(os.path.join(extract_dir, "*.xlsx")))
     print(f"Trouve {len(excels)} fichiers Excel")
+
+    if not excels:
+        raise SystemExit("0 Excel trouve dans le zip")
 
     total_sent = 0
     total_errors = 0
@@ -333,14 +251,9 @@ def main():
         s = smtp_connect()
         for excel_path in batch:
             try:
-                camping = send_one_email(
-                    s,
-                    EMAIL_TO_TEST,
-                    subject=f"Rapport Sunelia - {os.path.basename(excel_path)}",
-                    excel_path=excel_path,
-                )
+                camping = send_one_email(s, excel_path)
                 total_sent += 1
-                print(f"  Envoye : {camping} -> {EMAIL_TO_TEST}")
+                print(f"  Envoye : {camping} -> {EMAIL_TO}")
             except Exception as e:
                 total_errors += 1
                 print(f"  ERREUR envoi {os.path.basename(excel_path)}: {e}")
@@ -354,7 +267,6 @@ def main():
     if total_sent == 0:
         raise SystemExit("0 mails envoyes (voir erreurs ci-dessus)")
     if total_errors > 0:
-        # optionnel: faire échouer si au moins une erreur
         print(f"ATTENTION: {total_errors} erreurs sur l'envoi.")
 
 
