@@ -2,3 +2,14 @@
 .venv/
 __pycache__/
 log.txt
+
+# backups / temp
+*.bak
+*.bak2
+*.zip
+run_logs_*/
+run_logs_*.*
+
+# local artifacts
+*.apex
+*.txt
