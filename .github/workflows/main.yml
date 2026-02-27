@@ -17,7 +17,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install playwright pandas openpyxl openai matplotlib
+          pip install playwright pandas openpyxl matplotlib pillow
           playwright install chromium
           playwright install-deps
 
@@ -32,5 +32,5 @@ jobs:
           SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: python send_reports.py
+run: python send_reports.py
+
