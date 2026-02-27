@@ -30,7 +30,7 @@ EMAIL_FROM = os.environ["SMTP_EMAIL"]
 EMAIL_PASSWORD = os.environ["SMTP_PASSWORD"]
 EMAIL_TO_TEST = os.environ["EMAIL_TO"]
 
-# Secret GitHub déjà créé: OPENAI_API_KEY
+# Secret GitHub: OPENAI_API_KEY
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
@@ -60,7 +60,7 @@ def _strip_code_fences(text: str) -> str:
 def generer_sparkline_cid(df, cid_prefix="spark"):
     """
     Génère une mini-courbe PNG et retourne (cid, png_bytes).
-    IMPORTANT: on utilise CID (<img src="cid:...">) car Outlook bloque souvent data:image;base64.
+    IMPORTANT: CID (<img src="cid:...">) pour compatibilité Outlook (data: base64 souvent bloqué).
     """
     if plt is None or df is None:
         return None
@@ -84,7 +84,6 @@ def generer_sparkline_cid(df, cid_prefix="spark"):
         buf.seek(0)
 
         png_bytes = buf.read()
-        # CID unique (stable pour un contenu donné)
         cid = f"{cid_prefix}_{abs(hash(png_bytes))}"
         return cid, png_bytes
     except Exception:
@@ -93,7 +92,7 @@ def generer_sparkline_cid(df, cid_prefix="spark"):
 
 def analyser_feuille_kpi(nom_feuille: str, df) -> str:
     """
-    Demande à lIA: KPI + phrase danalyse courte sous forme de 2 <td>.
+    Retourne 2 <td> : KPI + analyse courte.
     """
     if client is None or pd is None or df is None or df.empty:
         return (
@@ -134,9 +133,6 @@ Règles strictes :
 
 
 def generer_intro_globale(raw_kpi_text: str) -> str:
-    """
-    Intro courte "Bonjour," (3 lignes max).
-    """
     if client is None:
         return "Bonjour,<br>Veuillez trouver ci-dessous la synthèse IA du rapport en pièce jointe."
 
@@ -162,7 +158,7 @@ Ton : professionnel, direct, positif. Commence par "Bonjour,".
 def build_ai_dashboard_html(excel_path: str, camping_name: str):
     """
     Retourne (plain_text, html, related_images)
-    related_images = list of tuples: (cid, bytes, maintype, subtype)
+    related_images = list[(cid, bytes, maintype, subtype)]
     """
     if pd is None:
         plain = (
@@ -221,7 +217,7 @@ def build_ai_dashboard_html(excel_path: str, camping_name: str):
     <body style="font-family: Arial, sans-serif; color: #333; background-color: #f9f9f9; padding: 20px;">
         <div style="max-width: 860px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.08);">
             <h2 style="color: #2c3e50; border-bottom: 2px solid #e67e22; padding-bottom: 10px;">
-                 Synthèse IA  {camping_name}
+                📊 Synthèse IA — {camping_name}
             </h2>
 
             <p style="font-size: 14px; line-height: 1.5; color: #555;">
@@ -243,7 +239,7 @@ def build_ai_dashboard_html(excel_path: str, camping_name: str):
             </table>
 
             <p style="margin-top: 26px; font-size: 11px; color: #999; text-align: center;">
-                Rapport généré par IA  détail complet dans le fichier Excel joint.<br>
+                Rapport généré par IA — détail complet dans le fichier Excel joint.<br>
                 Source : {os.path.basename(excel_path)}
             </p>
         </div>
@@ -275,21 +271,22 @@ def send_one_email(smtp, email_to: str, subject: str, excel_path: str):
     msg["To"] = email_to
 
     msg.set_content(plain_body)
-msg.add_alternative(html_body, subtype="html")
+    msg.add_alternative(html_body, subtype="html")
 
-# Récupère la partie HTML ajoutée (add_alternative ne retourne rien)
-html_part = msg.get_payload()[-1]
+    # add_alternative ne retourne pas la partie ajoutée -> on la récupère
+    html_part = msg.get_payload()[-1]
 
-# Forcer multipart/related sur la partie HTML (sinon add_related peut échouer)
-try:
-    html_part.make_related()
-except Exception:
-    pass
+    # Forcer multipart/related sur la partie HTML
+    try:
+        html_part.make_related()
+    except Exception:
+        pass
 
-# Ajout des images inline via CID (meilleure compatibilité Outlook)
-for cid, data, maintype, subtype in (related_images or []):
-    html_part.add_related(data, maintype=maintype, subtype=subtype, cid=f"<{cid}>")
+    # Ajout des images inline via CID (Outlook)
+    for cid, data, maintype, subtype in (related_images or []):
+        html_part.add_related(data, maintype=maintype, subtype=subtype, cid=f"<{cid}>")
 
+    # Pièce jointe Excel
     with open(excel_path, "rb") as f:
         msg.add_attachment(
             f.read(),
@@ -306,7 +303,7 @@ def main():
     zips = glob.glob(os.path.join(DOWNLOAD_DIR, "Sunelia_Rapports_indiv_pour_groupe_*.zip"))
     if not zips:
         print("Aucun zip trouve")
-        return
+        raise SystemExit("Aucun zip trouve")
 
     def date_key(path):
         m = re.findall(r"\d{4}_\d{2}_\d{2}", os.path.basename(path))
@@ -327,6 +324,8 @@ def main():
     print(f"Trouve {len(excels)} fichiers Excel")
 
     total_sent = 0
+    total_errors = 0
+
     for i in range(0, len(excels), BATCH_SIZE):
         batch = excels[i : i + BATCH_SIZE]
         print(f"--- Lot {i // BATCH_SIZE + 1} ---")
@@ -343,6 +342,7 @@ def main():
                 total_sent += 1
                 print(f"  Envoye : {camping} -> {EMAIL_TO_TEST}")
             except Exception as e:
+                total_errors += 1
                 print(f"  ERREUR envoi {os.path.basename(excel_path)}: {e}")
         s.quit()
 
@@ -351,10 +351,12 @@ def main():
             time.sleep(DELAY_SECONDS)
 
     print(f"Termine ! {total_sent} mails envoyes")
-if total_sent == 0:
-    raise SystemExit("0 mails envoyes (voir erreurs ci-dessus)")
+    if total_sent == 0:
+        raise SystemExit("0 mails envoyes (voir erreurs ci-dessus)")
+    if total_errors > 0:
+        # optionnel: faire échouer si au moins une erreur
+        print(f"ATTENTION: {total_errors} erreurs sur l'envoi.")
 
 
 if __name__ == "__main__":
     main()
-
