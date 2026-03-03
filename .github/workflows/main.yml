@@ -2,6 +2,8 @@
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * 1'  # chaque lundi 7h UTC
 
 jobs:
   download-and-send:
@@ -13,11 +15,34 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: |
-          pip install playwright pandas openpyxl matplotlib pillow
+          pip install playwright pandas openpyxl matplotlib requests
           playwright install chromium
           playwright install-deps
+
+      - name: Install Salesforce CLI
+        run: |
+          npm install -g @salesforce/cli
+          sf --version
+
+      - name: Authenticate Salesforce (JWT)
+        env:
+          SF_CONSUMER_KEY: ${{ secrets.SF_CONSUMER_KEY }}
+          SF_USERNAME: ${{ secrets.SF_USERNAME }}
+          SF_PRIVATE_KEY: ${{ secrets.SF_PRIVATE_KEY }}
+          SF_LOGIN_URL: ${{ secrets.SF_LOGIN_URL }}
+        run: |
+          echo "$SF_PRIVATE_KEY" > /tmp/server.key
+          sf org login jwt \
+            --client-id "$SF_CONSUMER_KEY" \
+            --jwt-key-file /tmp/server.key \
+            --username "$SF_USERNAME" \
+            --instance-url "$SF_LOGIN_URL" \
+            --alias PROD \
+            --set-default
+          rm /tmp/server.key
+          sf org display --target-org PROD
 
       - name: Download reports
         env:
@@ -25,9 +50,10 @@ jobs:
           CRM_PASSWORD: ${{ secrets.CRM_PASSWORD }}
         run: python download_reports.py
 
-      - name: Send reports
+      - name: Generate and send reports
         env:
           SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          SF_ORG: PROD
         run: python send_reports.py
