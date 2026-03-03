@@ -50,6 +50,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from email import policy
+import math
 
 
 # ═══════════════════════════════════════════════════════
@@ -524,6 +525,8 @@ def nice_scale_max(values: List[float]) -> float:
 def _draw_speedometer(ax, value: float, label: str, ring_color: str, scale_max: float):
     try:
         v = float(value)
+        if math.isnan(v) or math.isinf(v):
+            v = 0.0
     except Exception:
         v = 0.0
 
