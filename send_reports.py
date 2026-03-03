@@ -99,8 +99,10 @@ def main():
     eml_dir = os.path.join(DOWNLOAD_DIR, 'eml_output')
     os.makedirs(eml_dir, exist_ok=True)
 
-    excels = sorted(glob.glob(os.path.join(extract_dir, '*.xlsx')))
-    print(f'Trouve {len(excels)} fichiers Excel')
+    excels_all = sorted(glob.glob(os.path.join(extract_dir, '*.xlsx')))
+    SKIP = ['Wecamp', 'Baia']
+    excels = [e for e in excels_all if not any(s.lower() in os.path.basename(e).lower() for s in SKIP)]
+    print(f'Trouve {len(excels_all)} fichiers Excel, {len(excels)} apres filtrage (exclus: {len(excels_all)-len(excels)})')
 
     if not excels:
         raise SystemExit('0 Excel trouve dans le zip')

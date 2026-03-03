@@ -508,7 +508,15 @@ def plot_produits_donut(data: dict) -> bytes:
 # ──────────────────────────────────────────────────────
 
 def nice_scale_max(values: List[float]) -> float:
-    mx = max([abs(float(v)) for v in values] + [0.0])
+    clean = []
+    for v in values:
+        try:
+            f = float(v)
+            if not math.isnan(f) and not math.isinf(f):
+                clean.append(abs(f))
+        except Exception:
+            pass
+    mx = max(clean) if clean else 0.0
     if mx <= 8:
         return 10.0
     if mx <= 16:
@@ -562,13 +570,14 @@ def _draw_speedometer(ax, value: float, label: str, ring_color: str, scale_max: 
     ax.add_patch(bg)
 
     # Value arc from 0 baseline (90°)
-    if v >= 0:
-        theta1, theta2 = angle, 90.0
-    else:
-        theta1, theta2 = 90.0, angle
-
-    arc = Wedge((0, 0), r, theta1, theta2, width=width, facecolor=ring_color, edgecolor="none")
-    ax.add_patch(arc)
+    if v != 0:
+        if v >= 0:
+            theta1, theta2 = angle, 90.0
+        else:
+            theta1, theta2 = 90.0, angle
+        if not (math.isnan(theta1) or math.isnan(theta2)) and abs(theta2 - theta1) > 0.01:
+            arc = Wedge((0, 0), r, theta1, theta2, width=width, facecolor=ring_color, edgecolor="none")
+            ax.add_patch(arc)
 
     # Ticks
     ax.text(-r, -0.02, f"-{int(scale_max)}%", ha="left", va="top", fontsize=7.5, color=THEME["muted2"])
@@ -602,6 +611,8 @@ def plot_benchmark_speedometers(title: str, items: List[Tuple[str, float, str]],
     vals = [float(v or 0) for _, v, _ in items]
     if scale_max is None:
         scale_max = nice_scale_max(vals)
+    if scale_max < 1.0:
+        scale_max = 10.0
 
     fig = plt.figure(figsize=(9.2, 2.9), dpi=180)
     fig.patch.set_facecolor("white")
