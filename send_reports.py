@@ -80,11 +80,23 @@ def generate_eml(excel_path: str, output_dir: str) -> str:
     return eml_path
 
 
-def send_eml(smtp_conn, eml_path: str):
-    """Envoie un fichier .eml via SMTP."""
+def send_eml(smtp_conn, eml_path: str, excel_path: str):
+    """Envoie un fichier .eml avec le xlsx en piece jointe."""
+    from email import policy as epolicy
+    from email.mime.base import MIMEBase
+    from email import encoders
+
     with open(eml_path, 'rb') as f:
-        eml_bytes = f.read()
-    smtp_conn.sendmail(EMAIL_FROM, [EMAIL_TO], eml_bytes)
+        msg = email.message_from_bytes(f.read(), policy=epolicy.SMTP)
+
+    with open(excel_path, 'rb') as f:
+        part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        part.set_payload(f.read())
+        encoders.encode_base64(part)
+        part.add_header('Content-Disposition', 'attachment', filename=os.path.basename(excel_path))
+        msg.attach(part)
+
+    smtp_conn.sendmail(EMAIL_FROM, [EMAIL_TO], msg.as_bytes())
 
 
 def main():
