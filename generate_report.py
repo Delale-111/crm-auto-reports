@@ -539,7 +539,7 @@ def _draw_speedometer(ax, value: float, label: str, ring_color: str, scale_max: 
         v = 0.0
 
     v = max(-scale_max, min(scale_max, v))
-    angle = 90.0 - (v / scale_max) * 90.0  # -max=180, 0=90, +max=0
+    angle = 90.0 - (v / scale_max) * 90.0 if scale_max > 0 else 90.0  # -max=180, 0=90, +max=0
 
     ax.set_aspect("equal")
     ax.axis("off")
@@ -621,7 +621,12 @@ def plot_benchmark_speedometers(title: str, items: List[Tuple[str, float, str]],
     n = len(items)
     for i, (lbl, val, col) in enumerate(items):
         ax = fig.add_subplot(1, n, i + 1)
-        _draw_speedometer(ax, val, lbl, col, scale_max)
+        try:
+            _draw_speedometer(ax, val, lbl, col, scale_max)
+        except Exception:
+            ax.text(0.5, 0.5, f"{lbl}\nN/A", ha="center", va="center",
+                    fontsize=10, color="#6f8590", transform=ax.transAxes)
+            ax.axis("off")
 
     fig.tight_layout(rect=[0, 0, 1, 0.92])
     buf = BytesIO()
@@ -639,8 +644,8 @@ def build_email_html(D: dict, cids: dict) -> str:
     kf = D.get("kpi_fermes", {})
     kt = D.get("kpi_total", {})
     produits = D.get("produits", {})
-    saison = D.get("saisonnalite", [])
-    bassins = D.get("bassins", [])
+    saison = [s for s in D.get("saisonnalite", []) if isinstance(s, dict)]
+    bassins = [b for b in D.get("bassins", []) if isinstance(b, dict)]
     insights = D.get("insights", [])
 
     date_obs = meta.get("date_observation", "")

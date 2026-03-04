@@ -124,7 +124,7 @@ def main():
     for excel_path in excels:
         try:
             eml_path = generate_eml(excel_path, eml_dir)
-            eml_files.append(eml_path)
+            eml_files.append((eml_path, excel_path))
         except Exception as e:
             print(f'  ERREUR generation {os.path.basename(excel_path)}: {e}')
 
@@ -142,9 +142,9 @@ def main():
         print(f'--- Lot {i // BATCH_SIZE + 1} ---')
 
         s = smtp_connect()
-        for eml_path in batch:
+        for eml_path, xlsx_path in batch:
             try:
-                send_eml(s, eml_path)
+                send_eml(s, eml_path, xlsx_path)
                 total_sent += 1
                 print(f'  Envoye : {os.path.basename(eml_path)} -> {EMAIL_TO}')
             except Exception as e:
